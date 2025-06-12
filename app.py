@@ -728,7 +728,9 @@ from fastapi import Request
 @app.post("/")
 async def root_redirect(request: Request):
     body = await request.json()
-    return query(QueryRequest(**body))
+    query_request = QueryRequest(**body)
+    return await query_knowledge_base(query_request)
+
 
 
 if __name__ == "__main__":
