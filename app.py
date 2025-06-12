@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Constants
 DB_PATH = "knowledge_base.db"
-SIMILARITY_THRESHOLD = 0.3  # Lowered threshold for better recall
+SIMILARITY_THRESHOLD = 0.68  # Lowered threshold for better recall
 MAX_RESULTS = 10  # Increased to get more context
 load_dotenv()
 MAX_CONTEXT_CHUNKS = 4  # Increased number of chunks per source
@@ -207,25 +207,26 @@ async def find_similar_content(query_embedding, conn):
                 embedding = json.loads(chunk["embedding"])
                 similarity = cosine_similarity(query_embedding, embedding)
                 
-                # Always include result, no threshold
-                url = chunk["url"]
-                if not url.startswith("http"):
-                    url = f"https://discourse.onlinedegree.iitm.ac.in/t/{url}"
-                
-                results.append({
-                    "source": "discourse",
-                    "id": chunk["id"],
-                    "post_id": chunk["post_id"],
-                    "topic_id": chunk["topic_id"],
-                    "title": chunk["topic_title"],
-                    "url": url,
-                    "content": chunk["content"],
-                    "author": chunk["author"],
-                    "created_at": chunk["created_at"],
-                    "chunk_index": chunk["chunk_index"],
-                    "similarity": float(similarity)
-                })
-
+                if similarity >= SIMILARITY_THRESHOLD:
+                    # Ensure URL is properly formatted
+                    url = chunk["url"]
+                    if not url.startswith("http"):
+                        # Fix missing protocol
+                        url = f"https://discourse.onlinedegree.iitm.ac.in/t/{url}"
+                    
+                    results.append({
+                        "source": "discourse",
+                        "id": chunk["id"],
+                        "post_id": chunk["post_id"],
+                        "topic_id": chunk["topic_id"],
+                        "title": chunk["topic_title"],
+                        "url": url,
+                        "content": chunk["content"],
+                        "author": chunk["author"],
+                        "created_at": chunk["created_at"],
+                        "chunk_index": chunk["chunk_index"],
+                        "similarity": float(similarity)
+                    })
                 
                 processed_count += 1
                 if processed_count % 1000 == 0:
@@ -251,20 +252,22 @@ async def find_similar_content(query_embedding, conn):
                 embedding = json.loads(chunk["embedding"])
                 similarity = cosine_similarity(query_embedding, embedding)
                 
-                url = chunk["original_url"]
-                if not url or not url.startswith("http"):
-                    url = f"https://docs.onlinedegree.iitm.ac.in/{chunk['doc_title']}"
-                
-                results.append({
-                    "source": "markdown",
-                    "id": chunk["id"],
-                    "title": chunk["doc_title"],
-                    "url": url,
-                    "content": chunk["content"],
-                    "chunk_index": chunk["chunk_index"],
-                    "similarity": float(similarity)
-                })
-
+                if similarity >= SIMILARITY_THRESHOLD:
+                    # Ensure URL is properly formatted
+                    url = chunk["original_url"]
+                    if not url or not url.startswith("http"):
+                        # Use a default URL if missing
+                        url = f"https://docs.onlinedegree.iitm.ac.in/{chunk['doc_title']}"
+                    
+                    results.append({
+                        "source": "markdown",
+                        "id": chunk["id"],
+                        "title": chunk["doc_title"],
+                        "url": url,
+                        "content": chunk["content"],
+                        "chunk_index": chunk["chunk_index"],
+                        "similarity": float(similarity)
+                    })
                 
                 processed_count += 1
                 if processed_count % 1000 == 0:
@@ -720,15 +723,6 @@ async def health_check():
             status_code=500,
             content={"status": "unhealthy", "error": str(e), "api_key_set": bool(API_KEY)}
         )
-from fastapi import Request
-
-@app.post("/")
-async def root_redirect(request: Request):
-    body = await request.json()
-    query_request = QueryRequest(**body)
-    return await query_knowledge_base(query_request)
-
-
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True) 
