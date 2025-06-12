@@ -723,6 +723,13 @@ async def health_check():
             status_code=500,
             content={"status": "unhealthy", "error": str(e), "api_key_set": bool(API_KEY)}
         )
+from fastapi import Request
+
+@app.post("/")
+async def root_redirect(request: Request):
+    body = await request.json()
+    return await query(QueryRequest(**body))
+
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True) 
