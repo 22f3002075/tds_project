@@ -596,93 +596,78 @@ def parse_llm_response(response):
         }
 
 # Define API routes
+from fastapi import Request
+
 @app.post("/query")
-async def query_knowledge_base(request: QueryRequest):
+async def query_knowledge_base(request: Request):
     try:
-        # Log the incoming request
-        logger.info(f"Received query request: question='{request.question[:50]}...', image_provided={request.image is not None}")
-        
+        # Read raw body
+        raw_body = await request.body()
+        try:
+            data = json.loads(raw_body)
+        except Exception:
+            logger.error("Invalid JSON body")
+            return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
+
+        question = data.get("question", "").strip()
+        image = data.get("image", None)
+
+        logger.info(f"Received query request: question='{question[:50]}...', image_provided={image is not None}")
+
         if not API_KEY:
             error_msg = "API_KEY environment variable not set"
             logger.error(error_msg)
-            return JSONResponse(
-                status_code=500,
-                content={"error": error_msg}
-            )
-            
+            return JSONResponse(status_code=500, content={"error": error_msg})
+
         conn = get_db_connection()
-        
+
         try:
-            # Process the query (handle text and optional image)
+            # Process query
             logger.info("Processing query and generating embedding")
-            query_embedding = await process_multimodal_query(
-                request.question,
-                request.image
-            )
-            
-            # Find similar content
+            query_embedding = await process_multimodal_query(question, image)
+
             logger.info("Finding similar content")
             relevant_results = await find_similar_content(query_embedding, conn)
-            
+
             if not relevant_results:
-                logger.info("No relevant results found")
-                return {
-                    "answer": "I couldn't find any relevant information in my knowledge base.",
-                    "links": []
-                }
-            
-            # Enrich results with adjacent chunks for better context
-            logger.info("Enriching results with adjacent chunks")
+                return {"answer": "I couldn't find any relevant information in my knowledge base.", "links": []}
+
             enriched_results = await enrich_with_adjacent_chunks(conn, relevant_results)
-            
-            # Generate answer
             logger.info("Generating answer")
-            llm_response = await generate_answer(request.question, enriched_results)
-            
-            # Parse the response
-            logger.info("Parsing LLM response")
+            llm_response = await generate_answer(question, enriched_results)
+
             result = parse_llm_response(llm_response)
-            
-            # If links extraction failed, create them from the relevant results
+
+            # Fallback if no links extracted
             if not result["links"]:
-                logger.info("No links extracted, creating from relevant results")
-                # Create a dict to deduplicate links from the same source
-                links = []
                 unique_urls = set()
-                
-                for res in relevant_results[:5]:  # Use top 5 results
+                links = []
+                for res in relevant_results[:5]:
                     url = res["url"]
                     if url not in unique_urls:
                         unique_urls.add(url)
                         snippet = res["content"][:100] + "..." if len(res["content"]) > 100 else res["content"]
                         links.append({"url": url, "text": snippet})
-                
                 result["links"] = links
-            
-            # Log the final result structure (without full content for brevity)
+
             logger.info(f"Returning result: answer_length={len(result['answer'])}, num_links={len(result['links'])}")
-            
-            # Return the response in the exact format required
             return result
+
         except Exception as e:
             error_msg = f"Error processing query: {e}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
-            return JSONResponse(
-                status_code=500,
-                content={"error": error_msg}
-            )
+            return JSONResponse(status_code=500, content={"error": error_msg})
+
         finally:
             conn.close()
+
     except Exception as e:
-        # Catch any exceptions at the top level
         error_msg = f"Unhandled exception in query_knowledge_base: {e}"
         logger.error(error_msg)
         logger.error(traceback.format_exc())
-        return JSONResponse(
-            status_code=500,
-            content={"error": error_msg}
-        )
+        return JSONResponse(status_code=500, content={"error": error_msg})
+
 
 # Health check endpoint
 @app.get("/health")
