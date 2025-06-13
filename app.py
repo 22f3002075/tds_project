@@ -596,21 +596,13 @@ def parse_llm_response(response):
         }
 
 # Define API routes
-from fastapi import Request
+from fastapi import Body
 
 @app.post("/query")
-async def query_knowledge_base(request: Request):
+async def query_knowledge_base(query: QueryRequest = Body(...)):
     try:
-        # Read raw body
-        raw_body = await request.body()
-        try:
-            data = json.loads(raw_body)
-        except Exception:
-            logger.error("Invalid JSON body")
-            return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
-
-        question = data.get("question", "").strip()
-        image = data.get("image", None)
+        question = query.question.strip()
+        image = query.image
 
         logger.info(f"Received query request: question='{question[:50]}...', image_provided={image is not None}")
 
@@ -667,6 +659,7 @@ async def query_knowledge_base(request: Request):
         logger.error(error_msg)
         logger.error(traceback.format_exc())
         return JSONResponse(status_code=500, content={"error": error_msg})
+
 
 
 # Health check endpoint
