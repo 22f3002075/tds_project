@@ -596,45 +596,112 @@ def parse_llm_response(response):
         }
 
 # Define API routes
-from fastapi import Body
-
 @app.post("/query")
-async def query_knowledge_base(query: QueryRequest = Body(...)):
+async def query_knowledge_base(request_data: dict):
+    """
+    Main query endpoint that accepts JSON data directly
+    """
     try:
-        question = query.question.strip()
-        image = query.image
+        logger.info(f"Received query request: {request_data}")
+        
+        question = request_data.get("question", "").strip()
+        image = request_data.get("image", None)
 
-        logger.info(f"Received query request: question='{question[:50]}...', image_provided={image is not None}")
+        logger.info(f"Processing query: question='{question[:50]}...', image_provided={image is not None}")
+
+        # Validate required fields
+        if not question:
+            logger.error("Missing required field: question")
+            return JSONResponse(
+                status_code=400, 
+                content={"error": "Missing required field: question"}
+            )
 
         if not API_KEY:
             error_msg = "API_KEY environment variable not set"
             logger.error(error_msg)
-            return JSONResponse(status_code=500, content={"error": error_msg})
+            return JSONResponse(
+                status_code=500, 
+                content={"error": error_msg}
+            )
 
-        conn = get_db_connection()
+        # Get database connection
+        try:
+            conn = get_db_connection()
+        except Exception as e:
+            logger.error(f"Database connection failed: {e}")
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"Database connection failed: {str(e)}"}
+            )
 
         try:
-            # Process query
+            # Process query and generate embedding
             logger.info("Processing query and generating embedding")
-            query_embedding = await process_multimodal_query(question, image)
+            try:
+                query_embedding = await process_multimodal_query(question, image)
+            except Exception as e:
+                logger.error(f"Failed to generate embedding: {e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to generate embedding: {str(e)}"}
+                )
 
+            # Find similar content
             logger.info("Finding similar content")
-            relevant_results = await find_similar_content(query_embedding, conn)
+            try:
+                relevant_results = await find_similar_content(query_embedding, conn)
+            except Exception as e:
+                logger.error(f"Failed to find similar content: {e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to find similar content: {str(e)}"}
+                )
 
+            # Check if we found any results
             if not relevant_results:
-                return {"answer": "I couldn't find any relevant information in my knowledge base.", "links": []}
+                logger.info("No relevant results found")
+                response = {
+                    "answer": "I couldn't find any relevant information in my knowledge base to answer your question.",
+                    "links": []
+                }
+                return JSONResponse(content=response)
 
-            enriched_results = await enrich_with_adjacent_chunks(conn, relevant_results)
+            # Enrich results with adjacent chunks
+            try:
+                enriched_results = await enrich_with_adjacent_chunks(conn, relevant_results)
+            except Exception as e:
+                logger.error(f"Failed to enrich results: {e}")
+                # Continue with original results
+                enriched_results = relevant_results
+
+            # Generate answer using LLM
             logger.info("Generating answer")
-            llm_response = await generate_answer(question, enriched_results)
+            try:
+                llm_response = await generate_answer(question, enriched_results)
+            except Exception as e:
+                logger.error(f"Failed to generate answer: {e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": f"Failed to generate answer: {str(e)}"}
+                )
 
-            result = parse_llm_response(llm_response)
+            # Parse the LLM response
+            try:
+                result = parse_llm_response(llm_response)
+            except Exception as e:
+                logger.error(f"Failed to parse LLM response: {e}")
+                result = {
+                    "answer": "Error parsing the response from the language model.",
+                    "links": []
+                }
 
-            # Fallback if no links extracted
-            if not result["links"]:
+            # Fallback: if no links were extracted, add some from our results
+            if not result["links"] and relevant_results:
+                logger.info("No links extracted from LLM response, adding fallback links")
                 unique_urls = set()
                 links = []
-                for res in relevant_results[:5]:
+                for res in relevant_results[:5]:  # Take top 5 results
                     url = res["url"]
                     if url not in unique_urls:
                         unique_urls.add(url)
@@ -642,25 +709,41 @@ async def query_knowledge_base(query: QueryRequest = Body(...)):
                         links.append({"url": url, "text": snippet})
                 result["links"] = links
 
+            # Ensure the response structure is correct
+            if "answer" not in result:
+                result["answer"] = "Unable to generate a proper answer."
+            if "links" not in result:
+                result["links"] = []
+
             logger.info(f"Returning result: answer_length={len(result['answer'])}, num_links={len(result['links'])}")
-            return result
+            
+            # Return as JSONResponse to ensure proper formatting
+            return JSONResponse(content=result)
 
         except Exception as e:
             error_msg = f"Error processing query: {e}"
             logger.error(error_msg)
             logger.error(traceback.format_exc())
-            return JSONResponse(status_code=500, content={"error": error_msg})
+            return JSONResponse(
+                status_code=500,
+                content={"error": error_msg}
+            )
 
         finally:
-            conn.close()
+            # Ensure database connection is closed
+            try:
+                conn.close()
+            except:
+                pass
 
     except Exception as e:
         error_msg = f"Unhandled exception in query_knowledge_base: {e}"
         logger.error(error_msg)
         logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": error_msg})
-
-
+        return JSONResponse(
+            status_code=500,
+            content={"error": error_msg}
+        )
 
 # Health check endpoint
 @app.get("/health")
@@ -703,4 +786,4 @@ async def health_check():
         )
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True) 
+    uvicorn.run("app:app", host="0.0
